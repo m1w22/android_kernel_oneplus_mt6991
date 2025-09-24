@@ -7194,9 +7194,14 @@ static inline int find_idlest_cpu(struct sched_domain *sd, struct task_struct *p
 	return new_cpu;
 }
 
+static inline bool is_idle_cpu(int cpu)
+{
+	return available_idle_cpu(cpu) || sched_idle_cpu(cpu);
+}
+
 static inline int __select_idle_cpu(int cpu, struct task_struct *p)
 {
-	if ((available_idle_cpu(cpu) || sched_idle_cpu(cpu)) &&
+	if (is_idle_cpu(cpu) &&
 	    sched_cpu_cookie_match(cpu_rq(cpu), p))
 		return cpu;
 
@@ -7206,6 +7211,24 @@ static inline int __select_idle_cpu(int cpu, struct task_struct *p)
 #ifdef CONFIG_SCHED_SMT
 DEFINE_STATIC_KEY_FALSE(sched_smt_present);
 EXPORT_SYMBOL_GPL(sched_smt_present);
+
+/*
+ * Return true if all the CPUs in the SMT core where @cpu belongs are idle,
+ * false otherwise.
+ */
+static bool is_idle_core(int cpu)
+{
+	int sibling;
+
+	if (!sched_smt_active())
+		return is_idle_cpu(cpu);
+
+	for_each_cpu(sibling, cpu_smt_mask(cpu))
+		if (!is_idle_cpu(sibling))
+			return false;
+
+	return true;
+}
 
 static inline void set_idle_cores(int cpu, int val)
 {
@@ -7289,29 +7312,6 @@ static int select_idle_core(struct task_struct *p, int core, struct cpumask *cpu
 	return -1;
 }
 
-/*
- * Scan the local SMT mask for idle CPUs.
- */
-static int select_idle_smt(struct task_struct *p, struct sched_domain *sd, int target)
-{
-	int cpu;
-
-	for_each_cpu_and(cpu, cpu_smt_mask(target), p->cpus_ptr) {
-		if (cpu == target)
-			continue;
-		/*
-		 * Check if the CPU is in the LLC scheduling domain of @target.
-		 * Due to isolcpus, there is no guarantee that all the siblings are in the domain.
-		 */
-		if (!cpumask_test_cpu(cpu, sched_domain_span(sd)))
-			continue;
-		if (available_idle_cpu(cpu) || sched_idle_cpu(cpu))
-			return cpu;
-	}
-
-	return -1;
-}
-
 #else /* CONFIG_SCHED_SMT */
 
 static inline void set_idle_cores(int cpu, int val)
@@ -7328,9 +7328,9 @@ static inline int select_idle_core(struct task_struct *p, int core, struct cpuma
 	return __select_idle_cpu(core, p);
 }
 
-static inline int select_idle_smt(struct task_struct *p, struct sched_domain *sd, int target)
+static inline bool is_idle_core(int cpu)
 {
-	return -1;
+	return is_idle_cpu(cpu);
 }
 
 #endif /* CONFIG_SCHED_SMT */
@@ -7522,7 +7522,7 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 	 */
 	lockdep_assert_irqs_disabled();
 
-	if ((available_idle_cpu(target) || sched_idle_cpu(target)) &&
+	if (is_idle_core(target) &&
 	    asym_fits_cpu(task_util, util_min, util_max, target))
 		return target;
 
@@ -7530,7 +7530,7 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 	 * If the previous CPU is cache affine and idle, don't be stupid:
 	 */
 	if (prev != target && cpus_share_cache(prev, target) &&
-	    (available_idle_cpu(prev) || sched_idle_cpu(prev)) &&
+	    is_idle_core(prev) &&
 	    asym_fits_cpu(task_util, util_min, util_max, prev))
 		return prev;
 
@@ -7556,7 +7556,7 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 	if (recent_used_cpu != prev &&
 	    recent_used_cpu != target &&
 	    cpus_share_cache(recent_used_cpu, target) &&
-	    (available_idle_cpu(recent_used_cpu) || sched_idle_cpu(recent_used_cpu)) &&
+	    is_idle_core(recent_used_cpu) &&
 	    cpumask_test_cpu(recent_used_cpu, p->cpus_ptr) &&
 	    asym_fits_cpu(task_util, util_min, util_max, recent_used_cpu)) {
 		return recent_used_cpu;
@@ -7586,15 +7586,8 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
 	if (!sd)
 		return target;
 
-	if (sched_smt_active()) {
+	if (sched_smt_active())
 		has_idle_core = test_idle_cores(target);
-
-		if (!has_idle_core && cpus_share_cache(prev, target)) {
-			i = select_idle_smt(p, sd, prev);
-			if ((unsigned int)i < nr_cpumask_bits)
-				return i;
-		}
-	}
 
 	i = select_idle_cpu(p, sd, has_idle_core, target);
 	if ((unsigned)i < nr_cpumask_bits)
@@ -12166,7 +12159,6 @@ static void _nohz_idle_balance(struct rq *this_rq, unsigned int flags)
 	unsigned long next_balance = now + 60*HZ;
 	bool has_blocked_load = false;
 	int update_next_balance = 0;
-	int this_cpu = this_rq->cpu;
 	int balance_cpu;
 	struct rq *rq;
 
@@ -12193,11 +12185,7 @@ static void _nohz_idle_balance(struct rq *this_rq, unsigned int flags)
 	 */
 	smp_mb();
 
-	/*
-	 * Start with the next CPU after this_cpu so we will end with this_cpu and let a
-	 * chance for other idle cpu to pull load.
-	 */
-	for_each_cpu_wrap(balance_cpu,  nohz.idle_cpus_mask, this_cpu+1) {
+	for_each_cpu(balance_cpu, nohz.idle_cpus_mask) {
 		if (!idle_cpu(balance_cpu))
 			continue;
 
