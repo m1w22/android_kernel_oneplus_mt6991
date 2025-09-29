@@ -8332,7 +8332,8 @@ void __meminit kswapd_run(int nid)
 			pr_info("kcompressd disabled on node %d\n", nid);
  		}
 	}
-     out:
+	
+ out:
 	pgdat_kswapd_unlock(pgdat);
 }
 
