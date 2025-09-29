@@ -2213,7 +2213,7 @@ static struct ctl_table vm_table[] = {
 		.extra1		= SYSCTL_ZERO,
 	},
 #endif
-        {
+    {
 		.procname	= "workingset_protection",
 		.data		= &sysctl_workingset_protection,
 		.maxlen		= sizeof(bool),
