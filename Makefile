@@ -840,7 +840,21 @@ KBUILD_CFLAGS	+= -fno-delete-null-pointer-checks
 
 ifdef CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE
 KBUILD_CFLAGS += -O2
-KBUILD_RUSTFLAGS += -Copt-level=2
+KBUILD_RUSTFLAGS += -Copt-level=3
+KBUILD_CFLAGS	+= -fvectorize -funroll-loops -mllvm -polly \
+                    -mllvm -polly-run-inliner \
+                    -mllvm -polly-ast-use-context \
+                    -mllvm -polly-detect-keep-going \
+                    -mllvm -polly-invariant-load-hoisting \
+                    -mllvm -polly-vectorizer=stripmine \
+                    -mllvm -polly-loopfusion-greedy=1 \
+                    -mllvm -polly-reschedule=1 \
+                    -mllvm -polly-postopts=1 \
+                    -mllvm -polly-num-threads=0 \
+                    -mllvm -polly-omp-backend=LLVM \
+                    -mllvm -polly-scheduling=dynamic \
+                    -mllvm -polly-scheduling-chunksize=1
+POLLY_FLAGS	+= -mllvm -polly-run-dce
 else ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS += -Os
 KBUILD_RUSTFLAGS += -Copt-level=s
@@ -973,6 +987,7 @@ endif
 ifdef CONFIG_LTO_CLANG
 ifdef CONFIG_LTO_CLANG_THIN
 CC_FLAGS_LTO	:= -flto=thin -fsplit-lto-unit
+KBUILD_LDFLAGS	+= --thinlto-cache-dir=$(extmod_prefix).thinlto-cache --thinlto-jobs=$(nproc --all)
 else
 CC_FLAGS_LTO	:= -flto
 endif
